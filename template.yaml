@@ -1,0 +1,145 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  projectName:
+    Description: The project name
+    Type: String
+
+  userName:
+    Description: The user name
+    Type: String
+
+Resources:
+  MyLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Handler: app.lambda_handler
+      Role: !GetAtt "LambdaExecutionRole.Arn"
+      Code:
+        ZipFile: |
+          print('Hello World')
+      Runtime: python3.10
+      Timeout: "15"
+      FunctionName: !Sub "${projectName}-${userName}"
+
+  MyLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${userName}"
+      RetentionInDays: 7
+
+  LambdaExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: /
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:*"
+                Resource: "arn:aws:logs:*:*:*"
+              - Effect: Allow
+                Action:
+                  - "s3:GetObject"
+                  - "s3:DeleteObject"
+                Resource: !Sub "arn:aws:s3:::${projectName}-${userName}/*"
+              - Effect: Allow
+                Action:
+                  - "dynamodb:PutItem"
+                Resource: !GetAtt "MyDynamoDBTable.Arn"
+
+  MyIAMUser:
+    Type: "AWS::IAM::User"
+    Properties:
+      UserName: !Sub ${userName}
+
+  MyIAMPolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyName: MyPolicy
+      Users:
+        - !Ref MyIAMUser
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "s3:GetObject"
+              - "s3:ListBucket"
+              - "s3:PutObject"
+            Resource:
+              - !Sub "arn:aws:s3:::${projectName}-${userName}"
+              - !Sub "arn:aws:s3:::${projectName}-${userName}/*"
+          - Effect: Allow
+            Action:
+              - "s3:listAllMyBuckets"
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - "dynamodb:PutItem"
+              - "dynamodb:Scan"
+              - "dynamodb:DescribeTable"
+            Resource: !GetAtt "MyDynamoDBTable.Arn"
+          - Effect: Allow
+            Action:
+              - "dynamodb:ListTables"
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - "lambda:UpdateFunctionCode"
+              - "lambda:getFunction"
+            Resource: !GetAtt "MyLambdaFunction.Arn"
+          - Effect: Allow
+            Action:
+              - lambda:ListFunctions
+              - lambda:GetAccountSettings
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - logs:DescribeLogGroups
+              - logs:DescribeLogStreams
+              - logs:GetLogEvents
+            Resource: "*"
+
+  MyDynamoDBTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      TableName: !Sub "${projectName}-${userName}"
+      AttributeDefinitions:
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: timestamp
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  MyBucket:
+    Type: "AWS::S3::Bucket"
+    DependsOn: BucketPermission
+    Properties:
+      BucketName: !Sub "${projectName}-${userName}"
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: "s3:ObjectCreated:*"
+            Function: !GetAtt "MyLambdaFunction.Arn"
+
+  BucketPermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !GetAtt "MyLambdaFunction.Arn"
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref "AWS::AccountId"
+      SourceArn: !Sub "arn:aws:s3:::${projectName}-${userName}"
